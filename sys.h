@@ -20,6 +20,8 @@
 #include <sys/stat.h>
 #include <stdarg.h>
 #include <sys/mman.h>
+#include <time.h>
+#include <inttypes.h>
 
 
 

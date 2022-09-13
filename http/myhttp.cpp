@@ -74,19 +74,9 @@ void HTTP::close_conn(bool real_close)
 }
 HTTP::HTTP(int sockfd, struct sockaddr_in* a)
 {
-    //将套接字和客户端信息保存下来
-    memset(&cli_addr, 0, sizeof(struct sockaddr_in));
-    memcpy(&cli_addr, a, sizeof(struct sockaddr_in));
 
-    this->sockfd = sockfd;
-    this->t_wlen = 0;
-    this->r_wlen = 0;
-    this->t_rlen = MAX_BUFF_SIZE;
-    this->r_rlen = 0;
-    this->r_mode = 0;
-    // memset(readbuff, 0, sizeof(char)*MAX_BUFF_SIZE);
 }
-void HTTP::init(int sockfd, const sockaddr_in &addr, char *root, int TRIGMode,
+void HTTP::init(int sockfd, const sockaddr_in &addr, socklen_t _socklen, char *root, int TRIGMode,
                      int close_log, std::string user, std::string passwd, std::string sqlname)
 {
     this->sockfd = sockfd;
@@ -100,6 +90,8 @@ void HTTP::init(int sockfd, const sockaddr_in &addr, char *root, int TRIGMode,
     is_ET = TRIGMode;
     m_close_log = close_log;
 
+    socklen = _socklen;
+
     // strcpy(sql_user, user.c_str());
     // strcpy(sql_passwd, passwd.c_str());
     // strcpy(sql_name, sqlname.c_str());
@@ -108,6 +100,7 @@ void HTTP::init(int sockfd, const sockaddr_in &addr, char *root, int TRIGMode,
 }
 void HTTP::init()
 {
+    t_rlen = MAX_BUFF_SIZE;
     t_wlen = 0;
     r_wlen = 0;
     m_check_state = CHECK_STATE_REQUESTLINE;
@@ -144,11 +137,15 @@ bool HTTP::ReadNonBlock()
             {
                 if (errno == EAGAIN || errno == EWOULDBLOCK)
                     break;
+                if (errno == EINTR)
+                    continue;
+                perror("recv -1:");
                 return false;
             }
             else if (bytes_read == 0)
             {
                 /*连接已中止*/
+                perror("recv 0:");
                 return false;
             }
             r_rlen += bytes_read;
@@ -169,15 +166,17 @@ bool HTTP::WriteNonBlock()
 
     while(1)
     {
-        count = writev(sockfd, m_iv, t_wlen);
+        count = writev(sockfd, m_iv, m_iv_count);
 
         if(count < 0)
         {
-            if(count == EAGAIN)
+            if(errno == EAGAIN)
             {
                 modfd(m_epollfd, sockfd, EPOLLOUT, is_ET);
                 return true;
             }
+            unmap(); /*关闭文件*/
+            perror("error: ");
             return false;
         }
 
@@ -210,6 +209,7 @@ bool HTTP::WriteNonBlock()
             }
             else
             {
+                perror("发送完全");
                 return false;
             }
         }
@@ -626,9 +626,10 @@ void HTTP::process(void)
     }
     /*此时只是将发送数据准备好，实际发送在EPOLLOUT事件出发后实现*/
     bool write_ret = process_write(read_ret); 
-    if(!write_ret) //成功发送
+    if(!write_ret) //成功失败
     {
         close_conn();
+        return;
     }
     modfd(m_epollfd, sockfd, EPOLLOUT, is_ET);
 }

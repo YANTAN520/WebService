@@ -1,43 +1,140 @@
-#include "../lib.h"
+
+#include "server.h"
+#include <new>
+//抛出信号
+static void alarm_handler_fun(int signal_num)
+{
+    pthread_cond_signal(timer.get_time_out_cond());
+    alarm(timer.get_step() / 1000); //单位转换
+}
+
+/*传入线程池的，不能直接放在类里,timeout*/
+void timer_handler(void)
+{
+    #ifdef DEBUGER
+    printf("定时器处理\t\n");
+    #endif
+    TimeListElem* cur = timer.get_tail(), *tmp;
+    HTTP* link;
+    cur = cur->pre;
+    uint64_t now_time = GetTickCount();
+    while(cur != timer.get_head())
+    {
+        if(cur->target_time <= now_time)
+        {
+            tmp = cur;
+            cur = cur->pre;
+            timer.delete_list(tmp);
+            /*断开连接释放资源*/
+            link = list_entry(HTTP, tmp, tim);
+            continue;
+        }
+        break;
+    }
+    return;
+}
+
+/*超时线程处理，等待超时信号触发，然后加锁进行不活跃连接清理*/
+void* threadpool_time(void* arg) 
+{
+    //任务队列中有任务，就在工作线程中运行任务，其他时候通过
+    //循环阻塞和查询
+    threadpool_t* pool = (threadpool_t*)arg;
+
+    while(true)
+    {
+        pthread_mutex_lock(pool->get_lock());
+        //没有任务且没有shutdowm，阻塞
+        while(!(pool->get_shutdown()))
+        {
+            pthread_cond_wait(timer.get_time_out_cond(), pool->get_lock()); /*进入阻塞会释放锁*/
+            /*超时处理*/
+            timer_handler();
+        }
+
+        if(pool->get_shutdown())
+        {
+            //立刻结束此线程
+            pthread_mutex_unlock(pool->get_lock());
+            pthread_detach(pthread_self());
+            pthread_exit(NULL);
+        }
+        pthread_mutex_unlock((pool->get_lock()));
+    }
+    pthread_exit(NULL);
+}
+
+
+static void stop_handler_func(int signal_num)
+{
+    /*关闭所有资源*/
+    /*定时器资源不用释放*/
+    
+    /*http连接资源也不用释放*/
+
+    /*线程池资源需要全部关闭*/
+    
+}
 
 /*当读入数据时*/
 void* run(void* arg)
 {
 #ifdef DEBUGER
-    printf("进入到run函数");
+    printf("进入到run函数\t\n");
 #endif
-    if(arg)
+    if(arg != nullptr)
     {
         HTTP* http = (HTTP*)arg;
+        TimeListElem* node = http->get_list_elem();
         if(http->r_mode == 0)
         {
             //读取文件
 #ifdef DEBUGER
-            printf("开始读取数据");
+            printf("开始读取数据\t\n");
 #endif
             if(http->ReadNonBlock())
             {
 #ifdef DEBUGER
-            printf("开始解析数据");
+            printf("开始解析数据\t\n");
 #endif
                 http->process(); //开始读取报文和解析报文
 #ifdef DEBUGER
-            printf("解析数据完成");
+            printf("解析数据完成\t\n");
 #endif
+            }
+            else
+            {
+                #ifdef DEBUGER
+                printf("数据读取失败\t\n");
+                #endif
             }
         }
         else
         {
 #ifdef DEBUGER
-            printf("开始写数据");
+            printf("开始写数据\t\n");
 #endif
-            http->WriteNonBlock();
             //写文件
-#ifdef DEBUGER
-            printf("写入完成");
-#endif
+            if(http->WriteNonBlock()){
+                #ifdef DEBUGER
+                printf("写入完成\t\n");
+                #endif
+            }
+            else
+            {
+                #ifdef DEBUGER
+                printf("写入失败\t\n");
+                #endif
+            }
+
         }
-        
+        timer.insert_list_normal(node);
+    }
+    else
+    {
+        #ifdef DEBUGER
+        printf("传递参数错误\t\n");
+        #endif
     }
     return NULL;
 }
@@ -88,13 +185,17 @@ int AcceptNonBlock(int fd, struct sockaddr_in* cli, socklen_t* clen)
         ret = accept(fd, (struct sockaddr*)cli, clen);
         if(ret < 0)
         {
-            if(errno == EWOULDBLOCK) continue;
+            // if(errno == EWOULDBLOCK) continue;
+            if(ret != -1) continue;
             perror("Accept");
             return -1;
-        }else
-        {
-            return ret;
         }
+        if(HTTP::m_user_count >= MAX_FD)
+        {
+            printf("连接数量过多,连接建立失败\n\t");
+            return -1;
+        }
+        return ret;
     }
 }
 
@@ -115,9 +216,11 @@ int Server::epoll_init(int listed_fd)
         perror("epoll ctl");
         return EPOLL_CTL_ERROR;
     }
-    user = new HTTP[MAX_FD];
-    // user = (HTTP*)malloc(sizeof(HTTP) * MAX_FD);
-    if(!user)
+    try
+    {
+        user = new HTTP[MAX_FD];
+    }
+    catch(const std::bad_alloc &e)
     {
         perror("http user malloc");
         return MALLOC_ERROR;
@@ -145,9 +248,6 @@ int Server::start_server(void)
         return LISTEN_ERROR;
     }
     pool->threadpool_create();
-// #ifdef DEBUGER
-//     printf("pool init success");
-// #endif
     return epoll_init(this->sockfd);
 }
 
@@ -157,14 +257,15 @@ int Server::deal_connection(void)
     /*调用一个accept生成新的套接字，
     在epoll中声明，并生成HTTP文件放入HTTP文件中*/
     struct sockaddr_in cli;
-    socklen_t clen;
-    int connfd = AcceptNonBlock(sockfd, &cli, &clen);
+    int clen = 0;
+    int connfd = AcceptNonBlock(sockfd, &cli, (socklen_t*)&clen);
     if(connfd < 0)
     {
         return ACCEPT_ERROR;
     }
     //创建HTTP结构体，并存入
-    user[connfd].init(connfd, cli, m_root, 1, 1, "123", "123", "suibian"); 
+    user[connfd].init(connfd, cli, clen, m_root, 1, 1, "123", "123", "suibian"); 
+    timer.insert_list_normal(&(user[connfd].tim)); //放入链表
     return connfd;
 }
 
@@ -172,7 +273,7 @@ int Server::deal_read_cli(int readfd)
 {
     // user[readfd].set_mode(0);
 #ifdef DEBUGER
-    printf("添加成功");
+    printf("添加成功\t\n");
 #endif
     // sleep(1);
     user[readfd].set_mode(0);
@@ -192,30 +293,25 @@ int Server::server_work(void){
 
     int nfds, ret;
     for(;;){
-// #ifdef DEBUGER
-//         printf("循环中\n");
-// #endif
         nfds = epoll_wait(ep_fd, events, MAX_EVENT_NUMBER, TIMESLOT);
         if (nfds < 0 && errno != EINTR)
         {
-            // LOG_ERROR("%s", "epoll failure");
             break;
         }
         for(int i = 0; i < nfds; i++){
             if(events[i].data.fd == sockfd)
             {
                 //此时表示有连接建立
-#ifdef DEBUGER
+                #ifdef DEBUGER
                 printf("监听到连接\n");
-#endif
+                #endif
                 if((ret = deal_connection()) < 0)
                 {
-
                     continue;
                 } 
-#ifdef DEBUGER
-                    printf("套接字为%d\n", ret);
-#endif
+                #ifdef DEBUGER
+                printf("套接字为%d\n", ret);
+                #endif
                 /*处理客户端上数据*/
             }
             else if(events[i].events & EPOLLIN)
@@ -235,8 +331,13 @@ int Server::server_work(void){
     return 0;
 }
 
+
+
+
+
 Server::Server(int sockfd, struct sockaddr_in* a, 
-                int min_thr_num, int max_thr_num, int queue_max_size)
+                int min_thr_num, int max_thr_num, int queue_max_size,
+                int timeout)
 {
     //初始化监听描述符和服务器套接字
     if(a == NULL)
@@ -257,8 +358,13 @@ Server::Server(int sockfd, struct sockaddr_in* a,
     m_root = (char *)malloc(strlen(server_path) + strlen(root) + 1);
     strcpy(m_root, server_path);
     strcat(m_root, root);
+    /*定时器加入*/
+    time_out_step = timeout;
+    signal(SIGALRM, alarm_handler_fun);
+    signal(SIGTERM, stop_handler_func);
+    alarm(time_out_step); /*定时时间多久*/
+    timer.set_step(timeout*1000); /*s => ms*/
     return;
-
 }
 
 
@@ -268,7 +374,6 @@ Server::~Server()
     close(sockfd);
     close(ep_fd);
     delete pool;
-    delete user;
+    delete[] user;
 }
-
 

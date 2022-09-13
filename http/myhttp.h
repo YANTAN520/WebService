@@ -3,7 +3,10 @@
 
 #include "../sys.h"
 #include "../lib.h"
-// #include <aiocb.h>
+#include "../timer/timer.h"
+
+// struct TimeListElem;
+// struct TimeList;
 
 //HOST: %s\r\n
 class HTTP{
@@ -51,14 +54,16 @@ public:
     HTTP(){};
     ~HTTP(){};
     HTTP(int sockfd, struct sockaddr_in* a);
-    void init(int sockfd, const sockaddr_in &addr, char *, int, int, std::string user, std::string passwd, std::string sqlname);
+    void init(int sockfd, const sockaddr_in &addr, socklen_t _socklen, char *root, int TRIGMode,
+                     int close_log, std::string user, std::string passwd, std::string sqlname);
     void process(void);
     void set_mode(int mode){r_mode = mode;};
     void close_conn(bool real_close = true);
+    TimeListElem* get_list_elem(){ return &tim; }
     // bool read_once();
     // bool write();
-    int ReadNonBlock(void);
-    int WriteNonBlock(void);
+    bool ReadNonBlock(void);
+    bool WriteNonBlock(void);
     sockaddr_in *get_address()
     {
         return &cli_addr;
@@ -89,9 +94,12 @@ public:
     static int m_epollfd;
     static int m_user_count;
     int r_mode;                     //运行模式，0：读； 1：写
+        /*定时器*/
+    struct TimeListElem tim;
 private:
     //报文服务器和客户端信息
     struct sockaddr_in cli_addr;    //客户端信息
+    socklen_t socklen;
     // int ep_fd;
     int sockfd;                     //写或者读的套接字
     // struct sockaddr_in ser_addr; //服务器本身的信息
@@ -125,6 +133,8 @@ private:
     char *m_version;
     int m_content_length;
     int m_close_log;
+
+
 };
 
 

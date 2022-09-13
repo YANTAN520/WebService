@@ -26,6 +26,9 @@ public:
     friend void* threadpool_thread(void* args);
     friend void* adjust_thread(void* arg);
     friend int is_thread_alive(pthread_t tid);
+    pthread_mutex_t* get_lock() { return &lock; };
+    pthread_t* get_time_tid() { return &adjust_tid; };
+    int get_shutdown() { return shutdown; }; 
 
     ~threadpool_t();
 private:
@@ -35,8 +38,9 @@ private:
     pthread_cond_t queue_not_full;      /* 当任务队列满时，添加任务的线程阻塞，等待此条件变量 */
     pthread_cond_t queue_not_empty;     /* 任务队列里不为空时，通知等待任务的线程 */
  
-    pthread_t *threads;                 /* 存放线程池中每个线程的tid。数组 */
+    pthread_t *threads;                 /* 存放线程池中每个线程的tid数组 */
     pthread_t adjust_tid;               /* 存管理线程tid */
+    pthread_t time_out_tid;             /* 时间超时线程tid */
     threadpool_task_t *task_queue;      /* 任务队列(数组首地址) */
  
     int min_thr_num;                    /* 线程池最小线程数 */

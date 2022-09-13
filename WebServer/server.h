@@ -3,12 +3,14 @@
 
 #include "../sys.h"
 #include "../http/myhttp.h"
+#include "../timer/timer.h"
 
 
 class Server{
 public:
     Server(int sockfd, struct sockaddr_in* a, 
-            int min_thr_num, int max_thr_num, int queue_max_size);
+                int min_thr_num, int max_thr_num, int queue_max_size,
+                int timeout);
     int epoll_init(int listed_fd);
     int start_server(void);
     int server_work(void);
@@ -27,6 +29,7 @@ private:
     struct epoll_event events[MAX_EVENT_NUMBER];
     //线程池
     threadpool_t* pool;
+    int time_out_step; /*秒为单位*/
     //HTTP实现
     HTTP* user;
 };
@@ -36,6 +39,7 @@ int SetNonBlock(int iSock);
 int SetFlags(int iSock, int flags);
 int ReadNonBlock(int fd, char* request, size_t len);
 int WriteNonBlock(int fd, const char* response, size_t len);
+void* threadpool_time(void* arg);
 // void readTask(HTTP* http);
 // void writeTask(HTTP* http);
 #endif

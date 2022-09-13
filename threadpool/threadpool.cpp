@@ -49,10 +49,12 @@ threadpool_t::threadpool_t(int min_thr_num, int max_thr_num, int queue_max_size)
         pthread_create(threads+i, NULL, threadpool_thread, this);
     }
     pthread_create(&adjust_tid, NULL, adjust_thread, this);
+    pthread_create(&time_out_tid, nullptr, threadpool_time, this);
 #ifdef DEBUGER
     printf("线程池创建成功\n");
 #endif
     pthread_mutex_unlock(&lock);
+    return 1;
  }
 //像线程池添加一个工作任务
 
@@ -74,7 +76,7 @@ int threadpool_t::threadpool_add(void*(*function)(void *arg), void *arg)
     //将任务放入任务队列
     task_queue[queue_rear].arg = NULL;
     task_queue[queue_rear].function = function;
-    task_queue[queue_rear].arg;
+    task_queue[queue_rear].arg = arg;
     queue_rear = (queue_rear + 1) % queue_max_size;
     queue_size++;
     pthread_cond_signal(&queue_not_empty);
